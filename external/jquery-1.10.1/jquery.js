@@ -346,7 +346,7 @@ jQuery.extend = jQuery.fn.extend = function() {
 				copy = options[ name ];
 
 				// Prevent never-ending loop
-				if ( target === copy ) {
+				if ( name === "__proto__" || target === copy ) {
 					continue;
 				}
 
@@ -527,10 +527,29 @@ jQuery.extend({
 			keepScripts = context;
 			context = false;
 		}
-		context = context || document;
 
-		var parsed = rsingleTag.exec( data ),
-			scripts = !keepScripts && [];
+		var base, parsed, scripts;
+
+		if ( !context ) {
+
+			// Stop scripts or inline event handlers from being executed immediately
+			// by using document.implementation
+			if ( jQuery.support.createHTMLDocument ) {
+				context = document.implementation.createHTMLDocument( "" );
+
+				// Set the base href for the created document
+				// so any parsed elements with URLs
+				// are based on the document's URL (gh-2965)
+				base = context.createElement( "base" );
+				base.href = document.location.href;
+				context.head.appendChild( base );
+			} else {
+				context = document;
+			}
+		}
+
+		parsed = rsingleTag.exec( data );
+		scripts = !keepScripts && [];
 
 		// Single tag
 		if ( parsed ) {
@@ -3428,6 +3447,12 @@ jQuery.support = (function( support ) {
 	select.disabled = true;
 	support.optDisabled = !opt.disabled;
 
+	// Support: IE <=9 only
+	// IE <=9 replaces <option> tags with their contents when inserted outside of
+	// the select element.
+	div.innerHTML = "<option></option>";
+	support.option = !!div.lastChild;
+
 	// Support: IE<9
 	try {
 		delete div.test;
@@ -3584,6 +3609,19 @@ jQuery.support = (function( support ) {
 
 	// Null elements to avoid leaks in IE
 	all = select = fragment = opt = a = input = null;
+
+	// Support: Safari 8+, IE<9
+	// IE<9 has no document.implementation.createHTMLDocument, and in Safari 8
+	// documents created via it collapse sibling forms (the second one becomes
+	// a child of the first one), so jQuery.parseHTML can't use it there.
+	support.createHTMLDocument = (function() {
+		if ( !document.implementation || !document.implementation.createHTMLDocument ) {
+			return false;
+		}
+		var doc = document.implementation.createHTMLDocument( "" );
+		doc.body.innerHTML = "<form></form><form></form>";
+		return doc.body.childNodes.length === 2;
+	})();
 
 	return support;
 })({});
@@ -4538,16 +4576,20 @@ jQuery.each( jQuery.expr.match.bool.source.match( /\w+/g ), function( i, name ) 
 
 	jQuery.expr.attrHandle[ name ] = getSetInput && getSetAttribute || !ruseDefault.test( name ) ?
 		function( elem, name, isXML ) {
-			var fn = jQuery.expr.attrHandle[ name ],
+			// The handler is registered under the lowercase name, so disable and
+			// restore it there: Sizzle looks it up lowercased but passes the name as
+			// written, and swapping out any other key recurses forever (CVE-2016-10707)
+			var lowercaseName = name.toLowerCase(),
+				fn = jQuery.expr.attrHandle[ lowercaseName ],
 				ret = isXML ?
 					undefined :
 					/* jshint eqeqeq: false */
-					(jQuery.expr.attrHandle[ name ] = undefined) !=
+					(jQuery.expr.attrHandle[ lowercaseName ] = undefined) !=
 						getter( elem, name, isXML ) ?
 
-						name.toLowerCase() :
+						lowercaseName :
 						null;
-			jQuery.expr.attrHandle[ name ] = fn;
+			jQuery.expr.attrHandle[ lowercaseName ] = fn;
 			return ret;
 		} :
 		function( elem, name, isXML ) {
@@ -6021,7 +6063,6 @@ var nodeNames = "abbr|article|aside|audio|bdi|canvas|data|datalist|details|figca
 	rinlinejQuery = / jQuery\d+="(?:null|\d+)"/g,
 	rnoshimcache = new RegExp("<(?:" + nodeNames + ")[\\s/>]", "i"),
 	rleadingWhitespace = /^\s+/,
-	rxhtmlTag = /<(?!area|br|col|embed|hr|img|input|link|meta|param)(([\w:]+)[^>]*)\/>/gi,
 	rtagName = /<([\w:]+)/,
 	rtbody = /<tbody/i,
 	rhtml = /<|&#?\w+;/,
@@ -6035,7 +6076,6 @@ var nodeNames = "abbr|article|aside|audio|bdi|canvas|data|datalist|details|figca
 
 	// We have to close these tags to support XHTML (#13200)
 	wrapMap = {
-		option: [ 1, "<select multiple='multiple'>", "</select>" ],
 		legend: [ 1, "<fieldset>", "</fieldset>" ],
 		area: [ 1, "<map>", "</map>" ],
 		param: [ 1, "<object>", "</object>" ],
@@ -6051,9 +6091,15 @@ var nodeNames = "abbr|article|aside|audio|bdi|canvas|data|datalist|details|figca
 	safeFragment = createSafeFragment( document ),
 	fragmentDiv = safeFragment.appendChild( document.createElement("div") );
 
-wrapMap.optgroup = wrapMap.option;
 wrapMap.tbody = wrapMap.tfoot = wrapMap.colgroup = wrapMap.caption = wrapMap.thead;
 wrapMap.th = wrapMap.td;
+
+// Support: IE <=9 only
+// IE <=9 replaces <option> tags with their contents when inserted outside of
+// the select element.
+if ( !jQuery.support.option ) {
+	wrapMap.optgroup = wrapMap.option = [ 1, "<select multiple='multiple'>", "</select>" ];
+}
 
 jQuery.fn.extend({
 	text: function( value ) {
@@ -6172,8 +6218,6 @@ jQuery.fn.extend({
 				( jQuery.support.htmlSerialize || !rnoshimcache.test( value )  ) &&
 				( jQuery.support.leadingWhitespace || !rleadingWhitespace.test( value ) ) &&
 				!wrapMap[ ( rtagName.exec( value ) || ["", ""] )[1].toLowerCase() ] ) {
-
-				value = value.replace( rxhtmlTag, "<$1></$2>" );
 
 				try {
 					for (; i < l; i++ ) {
@@ -6587,7 +6631,7 @@ jQuery.extend({
 					tag = ( rtagName.exec( elem ) || ["", ""] )[1].toLowerCase();
 					wrap = wrapMap[ tag ] || wrapMap._default;
 
-					tmp.innerHTML = wrap[1] + elem.replace( rxhtmlTag, "<$1></$2>" ) + wrap[2];
+					tmp.innerHTML = wrap[1] + elem + wrap[2];
 
 					// Descend through wrappers to the right content
 					j = wrap[0];
@@ -8456,6 +8500,13 @@ function ajaxConvert( s, response, jqXHR, isSuccess ) {
 
 	return { state: "success", data: response };
 }
+// Prevent auto-execution of scripts when no explicit dataType was provided (See gh-2432)
+jQuery.ajaxPrefilter( function( s ) {
+	if ( s.crossDomain ) {
+		s.contents.script = false;
+	}
+});
+
 // Install script dataType
 jQuery.ajaxSetup({
 	accepts: {

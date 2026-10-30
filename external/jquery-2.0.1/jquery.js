@@ -316,8 +316,9 @@ jQuery.extend = jQuery.fn.extend = function() {
 				src = target[ name ];
 				copy = options[ name ];
 
+				// Prevent Object.prototype pollution
 				// Prevent never-ending loop
-				if ( target === copy ) {
+				if ( name === "__proto__" || target === copy ) {
 					continue;
 				}
 
@@ -473,6 +474,8 @@ jQuery.extend({
 	// context (optional): If specified, the fragment will be created in this context, defaults to document
 	// keepScripts (optional): If true, will include scripts passed in the html string
 	parseHTML: function( data, context, keepScripts ) {
+		var parsed, scripts, base;
+
 		if ( !data || typeof data !== "string" ) {
 			return null;
 		}
@@ -480,10 +483,25 @@ jQuery.extend({
 			keepScripts = context;
 			context = false;
 		}
-		context = context || document;
+		if ( !context ) {
+			// Stop scripts or inline event handlers from being executed immediately
+			// by using document.implementation
+			if ( jQuery.support.createHTMLDocument ) {
+				context = document.implementation.createHTMLDocument( "" );
 
-		var parsed = rsingleTag.exec( data ),
-			scripts = !keepScripts && [];
+				// Set the base href for the created document
+				// so any parsed elements with URLs
+				// are based on the document's URL (gh-2965)
+				base = context.createElement( "base" );
+				base.href = document.location.href;
+				context.head.appendChild( base );
+			} else {
+				context = document;
+			}
+		}
+
+		parsed = rsingleTag.exec( data );
+		scripts = !keepScripts && [];
 
 		// Single tag
 		if ( parsed ) {
@@ -3234,6 +3252,12 @@ jQuery.support = (function( support ) {
 	select.disabled = true;
 	support.optDisabled = !opt.disabled;
 
+	// Support: IE9
+	// IE9 replaces <option> tags with their contents when inserted outside of
+	// the select element.
+	div.innerHTML = "<option></option>";
+	support.option = !!div.lastChild;
+
 	// Check if an input maintains its value after becoming a radio
 	// Support: IE9, IE10
 	input = document.createElement("input");
@@ -3258,6 +3282,17 @@ jQuery.support = (function( support ) {
 	div.style.backgroundClip = "content-box";
 	div.cloneNode( true ).style.backgroundClip = "";
 	support.clearCloneStyle = div.style.backgroundClip === "content-box";
+
+	// Support: Safari 8 only
+	// In Safari 8 documents created via document.implementation.createHTMLDocument
+	// collapse sibling forms: the second one becomes a child of the first one.
+	// Because of that, this security measure has to be disabled in Safari 8.
+	// https://bugs.webkit.org/show_bug.cgi?id=137337
+	support.createHTMLDocument = (function() {
+		var body = document.implementation.createHTMLDocument( "" ).body;
+		body.innerHTML = "<form></form><form></form>";
+		return body.childNodes.length === 2;
+	})();
 
 	// Run tests that need a body at doc ready
 	jQuery(function() {
@@ -4240,19 +4275,23 @@ jQuery.each( jQuery.expr.match.bool.source.match( /\w+/g ), function( i, name ) 
 	var getter = jQuery.expr.attrHandle[ name ] || jQuery.find.attr;
 
 	jQuery.expr.attrHandle[ name ] = function( elem, name, isXML ) {
-		var fn = jQuery.expr.attrHandle[ name ],
+		// The handler is registered under the lowercase name, so disable and
+		// restore it there: Sizzle looks it up lowercased but passes the name as
+		// written, and swapping out any other key recurses forever (CVE-2016-10707)
+		var lowercaseName = name.toLowerCase(),
+			fn = jQuery.expr.attrHandle[ lowercaseName ],
 			ret = isXML ?
 				undefined :
 				/* jshint eqeqeq: false */
 				// Temporarily disable this handler to check existence
-				(jQuery.expr.attrHandle[ name ] = undefined) !=
+				(jQuery.expr.attrHandle[ lowercaseName ] = undefined) !=
 					getter( elem, name, isXML ) ?
 
-					name.toLowerCase() :
+					lowercaseName :
 					null;
 
 		// Restore handler
-		jQuery.expr.attrHandle[ name ] = fn;
+		jQuery.expr.attrHandle[ lowercaseName ] = fn;
 
 		return ret;
 	};
@@ -5418,8 +5457,7 @@ function winnow( elements, qualifier, not ) {
 		return ( core_indexOf.call( qualifier, elem ) >= 0 ) !== not;
 	});
 }
-var rxhtmlTag = /<(?!area|br|col|embed|hr|img|input|link|meta|param)(([\w:]+)[^>]*)\/>/gi,
-	rtagName = /<([\w:]+)/,
+var rtagName = /<([\w:]+)/,
 	rhtml = /<|&#?\w+;/,
 	rnoInnerhtml = /<(?:script|style|link)/i,
 	manipulation_rcheckableType = /^(?:checkbox|radio)$/i,
@@ -5432,9 +5470,6 @@ var rxhtmlTag = /<(?!area|br|col|embed|hr|img|input|link|meta|param)(([\w:]+)[^>
 	// We have to close these tags to support XHTML (#13200)
 	wrapMap = {
 
-		// Support: IE 9
-		option: [ 1, "<select multiple='multiple'>", "</select>" ],
-
 		thead: [ 1, "<table>", "</table>" ],
 		col: [ 2, "<table><colgroup>", "</colgroup></table>" ],
 		tr: [ 2, "<table><tbody>", "</tbody></table>" ],
@@ -5443,11 +5478,13 @@ var rxhtmlTag = /<(?!area|br|col|embed|hr|img|input|link|meta|param)(([\w:]+)[^>
 		_default: [ 0, "", "" ]
 	};
 
-// Support: IE 9
-wrapMap.optgroup = wrapMap.option;
-
 wrapMap.tbody = wrapMap.tfoot = wrapMap.colgroup = wrapMap.caption = wrapMap.thead;
 wrapMap.th = wrapMap.td;
+
+// Support: IE 9
+if ( !jQuery.support.option ) {
+	wrapMap.optgroup = wrapMap.option = [ 1, "<select multiple='multiple'>", "</select>" ];
+}
 
 jQuery.fn.extend({
 	text: function( value ) {
@@ -5554,8 +5591,6 @@ jQuery.fn.extend({
 			// See if we can take a shortcut and just use innerHTML
 			if ( typeof value === "string" && !rnoInnerhtml.test( value ) &&
 				!wrapMap[ ( rtagName.exec( value ) || [ "", "" ] )[ 1 ].toLowerCase() ] ) {
-
-				value = value.replace( rxhtmlTag, "<$1></$2>" );
 
 				try {
 					for ( ; i < l; i++ ) {
@@ -5794,7 +5829,7 @@ jQuery.extend({
 					// Deserialize a standard representation
 					tag = ( rtagName.exec( elem ) || ["", ""] )[ 1 ].toLowerCase();
 					wrap = wrapMap[ tag ] || wrapMap._default;
-					tmp.innerHTML = wrap[ 1 ] + elem.replace( rxhtmlTag, "<$1></$2>" ) + wrap[ 2 ];
+					tmp.innerHTML = wrap[ 1 ] + elem + wrap[ 2 ];
 
 					// Descend through wrappers to the right content
 					j = wrap[ 0 ];
@@ -7610,6 +7645,13 @@ function ajaxConvert( s, response, jqXHR, isSuccess ) {
 
 	return { state: "success", data: response };
 }
+// Prevent auto-execution of scripts when no explicit dataType was provided (See gh-2432)
+jQuery.ajaxPrefilter( function( s ) {
+	if ( s.crossDomain ) {
+		s.contents.script = false;
+	}
+});
+
 // Install script dataType
 jQuery.ajaxSetup({
 	accepts: {

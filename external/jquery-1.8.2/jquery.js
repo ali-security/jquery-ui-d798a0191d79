@@ -1,4 +1,29 @@
-/*!
+(function () {
+function create(window) {
+
+  if(window == null ) {
+    window = require('jsdom').jsdom().createWindow();
+    // assume window is a jsdom instance...
+    // jsdom includes an incomplete version of XMLHttpRequest
+    window.XMLHttpRequest = require("xmlhttprequest").XMLHttpRequest;
+    // trick jQuery into thinking CORS is supported (should be in node-XMLHttpRequest)
+    window.XMLHttpRequest.prototype.withCredentials = false;
+    
+    if(window.location == null) {
+      window.location = require('location');  
+    }
+
+    if(window.navigator == null) {
+      window.navigator = require('navigator');
+    }
+  }
+  
+
+  var location = window.location,
+      navigator = window.navigator,
+      XMLHttpRequest = window.XMLHttpRequest;
+
+  /*!
  * jQuery JavaScript Library v1.8.2
  * http://jquery.com/
  *
@@ -9,7 +34,7 @@
  * Released under the MIT license
  * http://jquery.org/license
  *
- * Date: Thu Sep 20 2012 21:13:05 GMT-0400 (Eastern Daylight Time)
+ * Date: Mon Mar 30 2026 00:08:49 GMT+0000 (UTC)
  */
 (function( window, undefined ) {
 var
@@ -56,7 +81,7 @@ var
 
 	// A simple way to check for HTML strings
 	// Prioritize #id over <tag> to avoid XSS via location.hash (#9521)
-	rquickExpr = /^(?:[^#<]*(<[\w\W]+>)[^>]*$|#([\w\-]*)$)/,
+	rquickExpr = /^(?:(<[\w\W]+>)[^>]*|#([\w\-]*))$/,
 
 	// Match a standalone tag
 	rsingleTag = /^<(\w+)\s*\/?>(?:<\/\1>|)$/,
@@ -322,8 +347,9 @@ jQuery.extend = jQuery.fn.extend = function() {
 				src = target[ name ];
 				copy = options[ name ];
 
+				// Prevent Object.prototype pollution
 				// Prevent never-ending loop
-				if ( target === copy ) {
+				if ( name === "__proto__" || target === copy ) {
 					continue;
 				}
 
@@ -489,7 +515,22 @@ jQuery.extend({
 			scripts = context;
 			context = 0;
 		}
-		context = context || document;
+		if ( !context ) {
+			// Stop scripts or inline event handlers from being executed immediately
+			// by using document.implementation
+			if ( jQuery.support.createHTMLDocument ) {
+				context = document.implementation.createHTMLDocument( "" );
+
+				// Set the base href for the created document
+				// so any parsed elements with URLs
+				// are based on the document's URL (gh-2965)
+				var base = context.createElement( "base" );
+				base.href = document.location.href;
+				context.head.appendChild( base );
+			} else {
+				context = document;
+			}
+		}
 
 		// Single tag
 		if ( (parsed = rsingleTag.exec( data )) ) {
@@ -1339,6 +1380,12 @@ jQuery.support = (function() {
 	input.checked = true;
 	support.noCloneChecked = input.cloneNode( true ).checked;
 
+	// Support: IE <=9 only
+	// IE <=9 replaces <option> tags with their contents when inserted outside of
+	// the select element.
+	div.innerHTML = "<option></option>";
+	support.option = !!div.lastChild;
+
 	// Make sure that the options inside disabled selects aren't marked as disabled
 	// (WebKit marks them as disabled)
 	select.disabled = true;
@@ -1502,6 +1549,16 @@ jQuery.support = (function() {
 	// Null elements to avoid leaks in IE
 	fragment.removeChild( div );
 	all = a = select = opt = input = fragment = div = null;
+
+	support.createHTMLDocument = ( function() {
+		try {
+			var body = document.implementation.createHTMLDocument( "" ).body;
+			body.innerHTML = "<form></form><form></form>";
+			return body.childNodes.length === 2;
+		} catch(e) {
+			return false;
+		}
+	} )();
 
 	return support;
 })();
@@ -5664,7 +5721,6 @@ var nodeNames = "abbr|article|aside|audio|bdi|canvas|data|datalist|details|figca
 	rscriptType = /\/(java|ecma)script/i,
 	rcleanScript = /^\s*<!(?:\[CDATA\[|\-\-)|[\]\-]{2}>\s*$/g,
 	wrapMap = {
-		option: [ 1, "<select multiple='multiple'>", "</select>" ],
 		legend: [ 1, "<fieldset>", "</fieldset>" ],
 		thead: [ 1, "<table>", "</table>" ],
 		tr: [ 2, "<table><tbody>", "</tbody></table>" ],
@@ -5676,9 +5732,13 @@ var nodeNames = "abbr|article|aside|audio|bdi|canvas|data|datalist|details|figca
 	safeFragment = createSafeFragment( document ),
 	fragmentDiv = safeFragment.appendChild( document.createElement("div") );
 
-wrapMap.optgroup = wrapMap.option;
 wrapMap.tbody = wrapMap.tfoot = wrapMap.colgroup = wrapMap.caption = wrapMap.thead;
 wrapMap.th = wrapMap.td;
+
+// Support: IE <=9 only
+if ( !jQuery.support.option ) {
+	wrapMap.optgroup = wrapMap.option = [ 1, "<select multiple='multiple'>", "</select>" ];
+}
 
 // IE6-8 can't serialize link, script, style, or any html5 (NoScope) tags,
 // unless wrapped in a div with non-breaking characters in front of it.
@@ -5869,7 +5929,6 @@ jQuery.fn.extend({
 				( jQuery.support.leadingWhitespace || !rleadingWhitespace.test( value ) ) &&
 				!wrapMap[ ( rtagName.exec( value ) || ["", ""] )[1].toLowerCase() ] ) {
 
-				value = value.replace( rxhtmlTag, "<$1></$2>" );
 
 				try {
 					for (; i < l; i++ ) {
@@ -6301,9 +6360,6 @@ jQuery.extend({
 					safe = safe || createSafeFragment( context );
 					div = context.createElement("div");
 					safe.appendChild( div );
-
-					// Fix "XHTML"-style tags in all browsers
-					elem = elem.replace(rxhtmlTag, "<$1></$2>");
 
 					// Go to html and back, then peel off extra wrappers
 					tag = ( rtagName.exec( elem ) || ["", ""] )[1].toLowerCase();
@@ -7458,17 +7514,11 @@ jQuery.fn.load = function( url, params, callback ) {
 		// See if a selector was specified
 		self.html( selector ?
 
-			// Create a dummy div to hold the results
-			jQuery("<div>")
+			// If a selector was specified, locate the right elements in a dummy div
+			// Exclude scripts to avoid IE 'Permission Denied' errors
+			jQuery("<div>").append( jQuery.parseHTML( responseText ) ).find( selector ) :
 
-				// inject the contents of the document in, removing the scripts
-				// to avoid any 'Permission Denied' errors in IE
-				.append( responseText.replace( rscript, "" ) )
-
-				// Locate the specified elements
-				.find( selector ) :
-
-			// If not, just inject the full result
+			// Otherwise use the full result
 			responseText );
 
 	});
@@ -8227,6 +8277,13 @@ jQuery.ajaxPrefilter( "json jsonp", function( s, originalSettings, jqXHR ) {
 		return "script";
 	}
 });
+// Prevent auto-execution of scripts when no explicit dataType was provided (See gh-2432)
+jQuery.ajaxPrefilter( function( s ) {
+    if ( s.crossDomain ) {
+        s.contents.script = false;
+    }
+} );
+
 // Install script dataType
 jQuery.ajaxSetup({
 	accepts: {
@@ -9438,3 +9495,11 @@ if ( typeof define === "function" && define.amd && define.amd.jQuery ) {
 }
 
 })( window );
+
+
+  window.jQuery.noConflict();
+  return window.jQuery;
+}
+module.exports = create('undefined' === typeof window ? undefined : window);
+module.exports.create = create;
+}());
